@@ -873,7 +873,7 @@ class FRAPCondition:
             params, cov = curve_fit(self._single_exp, 
                                     self.pos_timestamps, 
                                     self.pos_intensities,
-                                    bounds=(0, [1, np.inf, 1]))
+                                    bounds=(0, [1, np.inf]))
             std = np.sqrt(np.diag(cov))   # Stdev of fit parameters
 
             # y values of the fit parameters across positive timestamps
@@ -900,7 +900,7 @@ class FRAPCondition:
             params, cov = curve_fit(self._double_exp, 
                                     self.pos_timestamps, 
                                     self.pos_intensities,
-                                    bounds=(0, [1, np.inf, 1, np.inf, 1]))
+                                    bounds=(0, [1, np.inf, 1, np.inf]))
             std = np.sqrt(np.diag(cov))   # Stdev of fit parameters
 
             # y values of the fit parameters across positive timestamps
@@ -1150,15 +1150,22 @@ class FRAPCondition:
         return FRAPAnalysis(FRAPChannel(filepath, channel), **self.kwargs)
     
     @staticmethod
-    def _single_exp(dt, A, tau, C):
+    def _single_exp(dt, A, tau):
+        C = 1 - A
+        if C < 0:           # Enforce C >= 0, which is the case if A > 1
+            return np.full_like(dt, np.nan)
+        
         return A * (1 - np.exp(dt/-tau)) + C
     
     @staticmethod
-    def _double_exp(dt, A1, tau1, A2, tau2, C):
+    def _double_exp(dt, A1, tau1, A2, tau2):
+        C = 1 - A1 - A2
+        if C < 0:           # Enforce C >= 0, which is the case if A1 + A2 > 1
+            return np.full_like(dt, np.nan)
+        
         return (A1 * (1 - np.exp(dt/-tau1))) \
              + (A2 * (1 - np.exp(dt/-tau2))) \
              + C
-
 '''
 class FRAPDataset:
     def __init__(self, condition_dict: Dict[str, list[FRAPAnalysis]]):
