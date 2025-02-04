@@ -25,7 +25,7 @@ from czifile.czifile import CziFile
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 import pandas as pd
-from scipy.optimize import curve_fit
+from lmfit import Model
 
 # Image processing
 from scipy.ndimage import gaussian_filter
@@ -864,74 +864,47 @@ class FRAPCondition:
         
     @property 
     def single_exp_fit(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Tuple of ndarray of shapes ((2,), (2,2)). The first element 
-        is the fitted [A, tau].  The second element is the 
-        covariance matrix of A and tau."""
+        """Returns an lmfit ModelResult object 
+        for a single exponential fit."""
         if not hasattr(self, "_single_exp_fit"):
-            # Fit a single exponential. Bounds for A are (0, 1) 
-            # and bounds for tau are (0, infinity)
-            params, cov = curve_fit(self._single_exp, 
-                                    self.pos_timestamps, 
-                                    self.pos_intensities,
-                                    bounds=(0, [1, np.inf]))
-            std = np.sqrt(np.diag(cov))   # Stdev of fit parameters
-
-            # y values of the fit parameters across positive timestamps
-            fit_vals = self._single_exp(self.pos_timestamps, *params)
-
-            # Calculate residuals and r-squared
-            res = self.pos_intensities - fit_vals
-            r_sq = 1 - (np.sum(np.square(res)) \
-                     /  np.sum(np.square(self.pos_intensities \
-                             - np.mean(self.pos_intensities))))
-            
-            self._single_exp_fit = (params, fit_vals, std, res, r_sq)
+            # Fit a single exponential using lmfit. Bounds for A 
+            # are (0, 1) and bounds for tau are (0, infinity).
+            single_exp_model = Model(self._single_exp)
+            single_exp_model.set_param_hint('A', value=0.8, min=0, max=1)
+            single_exp_model.set_param_hint('tau', value=1, min=0)
+            single_exp_model.set_param_hint('C', value=0.2, 
+                                            min=0, max=1, expr='1 - A')     
+            fit_result = single_exp_model.fit(self.pos_intensities,
+                                              dt=self.pos_timestamps)
+            if fit_result.success:
+                self._single_exp_fit = fit_result
+            else:
+                print(f"Single exponential fit failed for {self.condition_name}")
 
         return self._single_exp_fit
     
     @property
     def double_exp_fit(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Tuple of ndarray of shapes ((4,), (4,4)). The first element 
-        is the fitted [A1, tau1, A2, tau2]. The second element is the 
-        covariance matrix of the fitted values."""
+        """Returns an lmfit ModelResult object
+        for a double exponential fit."""
         if not hasattr(self, "_double_exp_fit"):
-            # Fit a double exponential. Bounds for A terms are (0, 1) 
-            # and bounds for tau terms are (0, infinity)
-            params, cov = curve_fit(self._double_exp, 
-                                    self.pos_timestamps, 
-                                    self.pos_intensities,
-                                    bounds=(0, [1, np.inf, 1, np.inf]))
-            std = np.sqrt(np.diag(cov))   # Stdev of fit parameters
-
-            # y values of the fit parameters across positive timestamps
-            fit_vals = self._double_exp(self.pos_timestamps, *params)
-
-            # Calculate residuals and r-squared
-            res = self.pos_intensities - fit_vals
-            r_sq = 1 - (np.sum(np.square(res)) \
-                      / np.sum(np.square(self.pos_intensities \
-                             - np.mean(self.pos_intensities))))
-
-            self._double_exp_fit = (params, fit_vals, std, res, r_sq)
-
+            # Fit a double exponential using lmfit. Bounds for A terms 
+            # are (0, 1) and bounds for tau terms are (0, infinity).
+            double_exp_model = Model(self._double_exp)
+            double_exp_model.set_param_hint('A1', value=0.4, min=0, max=1)
+            double_exp_model.set_param_hint('tau1', value=1, min=0)
+            double_exp_model.set_param_hint('A2', value=0.4, min=0, max=1)
+            double_exp_model.set_param_hint('tau2', value=10, min=0)
+            double_exp_model.set_param_hint('C', value=0.2, 
+                                            min=0, max=1, expr='1 - A1 - A2')
+            fit_result = double_exp_model.fit(self.pos_intensities,
+                                              dt=self.pos_timestamps)
+            if fit_result.success:
+                self._double_exp_fit = fit_result
+            else:
+                print(f"Double exponential fit failed for {self.condition_name}")
+        
         return self._double_exp_fit
-    
-    @property
-    def print_fits(self):
-        """Pretty-print single- and double-exponential fits"""
-        for k, v in {self._single_exp: self.single_exp_fit, 
-                     self._double_exp: self.double_exp_fit}.items():
-            output = [f"{param : <12}:    {v[0][i]:.4f} ± {v[2][i]:.4f}" 
-                for i, param in enumerate(list(signature(k).parameters.keys())[1:])]
-            output.append(f"R-squared   :    {v[4]:.4f}")
-            print("{}:\n    {}".format(f"{k.__name__[1:]} fit", "\n    ".join(output)))
-    
-    @property
-    def print_stats(self):
-        """Pretty-print some non-parametric statistics."""
-        for attr in ['bleach_depths', 'prop_recovered', 'time_half_recovered']:
-            print(f"{attr : <20}:\
-            {np.nanmean(getattr(self, attr)):.4f} ± {np.nanstd(getattr(self, attr)):.4f}")
 
     #############
     ## METHODS ##
@@ -968,11 +941,25 @@ class FRAPCondition:
         self._prop_recovered = prop_recovered
         self._time_half_recovered = time_half_recovered
 
-        # Get only positive timestamps and their associated intensities
+        # Cache positive timestamps only and their associated 
+        # intensities, which are used for fitting
         pos_timestamps = timestamps[timestamps > 0]
         pos_intensities = norm_intensities[timestamps > 0]
         self._pos_timestamps = np.sort(pos_timestamps)
         self._pos_intensities = pos_intensities[np.argsort(pos_timestamps)]
+    
+    def print_fits(self):
+        """Pretty-print single- and double-exponential fits"""
+        print(f"Single exponential fit (R-squared = {self.single_exp_fit.summary()['rsquared']}):",
+              self.single_exp_fit.fit_report(show_correl=False).split("[[Variables]]")[-1])
+        print(f"Double exponential fit (R-squared = {self.double_exp_fit.summary()['rsquared']}):",
+              self.double_exp_fit.fit_report(show_correl=False).split("[[Variables]]")[-1])
+    
+    def print_stats(self):
+        """Pretty-print some non-parametric statistics."""
+        for attr in ['bleach_depths', 'prop_recovered', 'time_half_recovered']:
+            print(f"{attr : <20}:\
+            {np.nanmean(getattr(self, attr)):.4f} ± {np.nanstd(getattr(self, attr)):.4f}")
     
     def to_pickle(self, out_pkl: str):
         """Pickle FRAPCondition"""
@@ -983,39 +970,102 @@ class FRAPCondition:
     ## PLOTTING ##
     ##############
     def plot_scatterplot(self,
-                         plot_avg: bool=True,  
-                         plot_1exp: bool=False, 
-                         plot_2exp: bool=True,
-                         plot_std: bool=False,
+                         plot_rolling_mean: bool=True,  
+                         plot_rolling_std: bool=False,
+                         plot_single_exp: bool=False, 
+                         plot_double_exp: bool=True,
+                         plot_predicted_error: dict={},
                          show_plot: bool=True,
                          ylim: Tuple[float, float]=None, 
                          out_png: str=None):
-        """Plot normalized intensity versus time for all movies"""
+        """Plot normalized intensity versus time for all movies.
+        args:
+        -----
+        plot_rolling_mean   :   bool, plot the rolling average 
+                                intensity as a line
+        plot_rolling_std    :   bool, plot the rolling standard deviation
+                                as a shaded region of the plot.
+        plot_single_exp     :   bool, plot the single-exponential fit
+                                as a blue line.
+        plot_double_exp     :   bool, plot the double-exponential fit
+                                as a red line.
+        plot_predicted_error:   dict, plot the uncertaintly of the fit
+                                as a shaded region of the plot.
+                                Keys can be either "single_exp" or
+                                "double_exp", and values should be
+                                integers corresponding to the sigma
+                                of the fit uncertainty. 
+                                Ex.: {"double_exp": 1} will plot the
+                                standard deviation of the double-
+                                exponential fit as a shaded region.
+        show_plot           :   bool, show the plot
+        ylim                :   Tuple[float, float], y-axis limits
+        out_png             :   str, path to save the plot as a PNG
+
+        output:
+        -------
+        show                :   a plot of normalized intensity versus 
+                                time if show_plot is True
+        save                :   PNG to out_png if out_png is not None
+        
+        """
         # Plot normalized intensities
         plt.scatter(x=self.timestamps, y=self.norm_intensities, 
-                    s=2, color='dimgray')
+                    s=2, color='dimgray')        
         
-        # Plot the rolling average intensities
-        if plot_avg:
-            mean_times, mean_intensities, std = self.rolling_mean_intensities
+        # Plot the rolling average intensities and std, if desired
+        mean_times, mean_intensities, std = self.rolling_mean_intensities
+        if plot_rolling_mean:
             plt.plot(mean_times, mean_intensities, color='k')
 
-        if plot_std:
+        if plot_rolling_std:
             plt.fill_between(x=mean_times, 
                              y1=mean_intensities+std,
                              y2=mean_intensities-std,
-                             alpha=0.3, color='gray')
+                             alpha=0.3, 
+                             color='gray')
 
         # Plot exponential fits, if desired
-        if plot_1exp:
+        if plot_single_exp:
             plt.plot(self.pos_timestamps, 
-                     self.single_exp_fit[1], 
-                     'b-', linewidth=2)
+                     self.single_exp_fit.best_fit, 
+                     'b-', 
+                     linewidth=2)
 
-        if plot_2exp:
+        if plot_double_exp:
             plt.plot(self.pos_timestamps, 
-                     self.double_exp_fit[1], 
-                     'r-', linewidth=2)
+                     self.double_exp_fit.best_fit, 
+                     'r-', 
+                     linewidth=2)
+        
+        # Plot fit error, if desired
+        if plot_predicted_error:
+            if "single_exp" not in plot_predicted_error and \
+               "double_exp" not in plot_predicted_error:
+                print("plot_predicted_error must be a dict with keys \
+                      'single_exp' and/or 'double_exp'. No errors plotted.")
+            if "single_exp" in plot_predicted_error:
+                try:
+                    _ = self.single_exp_fit.eval_uncertainty(sigma=plot_predicted_error["single_exp"])
+                    del_y_pred = self.single_exp_fit.dely_predicted
+                    plt.fill_between(x=self.pos_timestamps, 
+                                     y1=self.single_exp_fit.best_fit + del_y_pred,
+                                     y2=self.single_exp_fit.best_fit - del_y_pred,
+                                     alpha=0.3, 
+                                     color='b')
+                except:
+                    print("Values for dictionary 'plot_predicted_error' must be integers.")
+            if "double_exp" in plot_predicted_error:
+                try:
+                    _ = self.double_exp_fit.eval_uncertainty(sigma=plot_predicted_error["double_exp"])
+                    del_y_pred = self.double_exp_fit.dely_predicted
+                    plt.fill_between(x=self.pos_timestamps, 
+                                     y1=self.double_exp_fit.best_fit + del_y_pred,
+                                     y2=self.double_exp_fit.best_fit - del_y_pred,
+                                     alpha=0.3, 
+                                     color='r')
+                except:
+                    print("Values for dictionary 'plot_predicted_error' must be integers.")
 
         # Axis labels
         plt.xlabel("Time relative to bleach (s)")
@@ -1032,33 +1082,15 @@ class FRAPCondition:
             plt.show()
         plt.close()
     
-    def plot_residuals(self, mode: str="double_exp", 
-                       show_plot: bool=True, out_png: str=None):
-        """Plot the residuals of one of the fits. mode can be
-        "double_exp" or "single_exp"."""
-        if mode == 'single_exp':
-            residuals = self.single_exp_fit[3]
-            mean_residuals = self.rolling_mean_intensities[1] \
-                - self._single_exp(self.rolling_mean_intensities[0], 
-                                   *self.single_exp_fit[0])
-            ylabel = "Residuals against single exponential fit"
-        elif mode == 'double_exp':
-            residuals = self.double_exp_fit[3]
-            mean_residuals = self.rolling_mean_intensities[1] \
-                - self._double_exp(self.rolling_mean_intensities[0], 
-                                   *self.double_exp_fit[0])
-            ylabel = "Residuals against double exponential fit"
-        else:
-            raise ValueError(f"FRAPCondition.plot_fit_residuals: mode must be",
-             "'single_exp' or 'double_exp', {mode} passed.")
-
-        plt.scatter(self.pos_timestamps, residuals, s=3, color='dimgray')
-        plt.plot(self.rolling_mean_intensities[0], mean_residuals, color='k')
-        plt.plot(self.pos_timestamps, [0 for _ in range(residuals.shape[0])], 
-                 linewidth=3, color='r')
-
-        plt.xlabel("Time relative to bleach (s)")
-        plt.ylabel(ylabel)
+    def plot_residuals(self, show_plot: bool=True, out_png: str=None):
+        """Plot the residuals of both the single-exponential
+        and double-exponential fit."""
+        _, axs = plt.subplots(2, 1, figsize=(6, 10), sharex=True)
+        self.single_exp_fit.plot_residuals(ax=axs[0], datafmt='k.', data_kws={'alpha': 0.5})
+        self.double_exp_fit.plot_residuals(ax=axs[1], datafmt='k.', data_kws={'alpha': 0.5})
+        axs[0].set_title("Single-exponential residuals")
+        axs[1].set_title("Double-exponential residuals")
+        axs[1].set_xlabel("Time relative to bleach (s)")
 
         if out_png is not None:
             plt.savefig(out_png, dpi=800)
@@ -1152,22 +1184,18 @@ class FRAPCondition:
     @staticmethod
     def _single_exp(dt, A, tau):
         C = 1 - A
-        if C < 0:           # Enforce C >= 0, which is the case if A > 1
-            return np.full_like(dt, np.nan)
-        
-        return A * (1 - np.exp(dt/-tau)) + C
-    
+        return A * (1 - np.exp(-dt / tau)) + C
+
     @staticmethod
     def _double_exp(dt, A1, tau1, A2, tau2):
         C = 1 - A1 - A2
-        if C < 0:           # Enforce C >= 0, which is the case if A1 + A2 > 1
-            return np.full_like(dt, np.nan)
-        
-        return (A1 * (1 - np.exp(dt/-tau1))) \
-             + (A2 * (1 - np.exp(dt/-tau2))) \
-             + C
-'''
+        return (A1 * (1 - np.exp(-dt / tau1))
+              + A2 * (1 - np.exp(-dt / tau2))
+              + C)
+
+
 class FRAPDataset:
+    """NOT FUllY IMPLEMENTED"""
     def __init__(self, condition_dict: Dict[str, list[FRAPAnalysis]]):
         # Sanity checks for passed dictionary
         for k, v in condition_dict.items():
@@ -1210,7 +1238,6 @@ class FRAPDataset:
     ##############
     ## PLOTTING ##
     ##############  
-'''
 
 if __name__ == "__main__":
     folder = '/Volumes/VF4/FRAP/221104_LnCAPFRAP'
