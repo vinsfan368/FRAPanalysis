@@ -264,10 +264,12 @@ class FRAPChannel:
         points = np.asarray(points)
         # Return as y, x Tuple
         center = (np.median(points[:,1]), np.median(points[:,0]))
-        self._bleach_circ_center = (center[0] - self.geo['Top'],
-                                    center[1] - self.geo['Left'])
-        #self._bleach_circ_center = (np.median(points[:,1]), 
-        #                            np.median(points[:,0]))
+        try:
+            self._bleach_circ_center = (center[0] - self.geo['Top'],
+                                        center[1] - self.geo['Left'])
+        except:
+            self._bleach_circ_center = (np.median(points[:,1]), 
+                                        np.median(points[:,0]))
         
         # Take the average of the x range and y range as the bleach diameter
         x_range = np.max(points[:,0]) - np.min(points[:,0])
