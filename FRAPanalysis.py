@@ -126,15 +126,26 @@ class FRAPChannel:
                   f"channel index {self.channel} is not valid for this movie")
             raise error
         movie = np.squeeze(movie)   # Squeeze out 1-length dimensions
+        assert movie.ndim == 3, "FRAPChannel.preprocess_movie: \
+            Movie has incorrect number of dimensions."
 
         # Crop movie if acquisition box doesn't agree with frame size
-        self.geo = self.metadata['Layers']['Layer']['Elements']\
-                                ['Rectangle']['Geometry']
-        sl = np.s_[:,round(self.geo['Top']):
-                     round(self.geo['Top']+self.geo['Height']),
-                     round(self.geo['Left']):
-                     round(self.geo['Left']+self.geo['Width'])]
-        return movie[sl]
+        try:
+            self.geo = self.metadata['Layers']['Layer']['Elements']\
+                                    ['Rectangle']['Geometry']
+            sl = np.s_[:,round(self.geo['Top']):
+                        round(self.geo['Top']+self.geo['Height']),
+                        round(self.geo['Left']):
+                        round(self.geo['Left']+self.geo['Width'])]
+            return movie[sl]
+        
+        except:
+            implied_X = self.metadata['Information']['Image']['SizeX']
+            implied_Y = self.metadata['Information']['Image']['SizeY']
+            if (implied_X != movie.shape[2]) or (implied_Y != movie.shape[1]):
+                raise RuntimeWarning("FRAPChannel.preprocess_movie: \
+                    Warning: movie size doesn't match metadata.")
+            return movie
 
     ################
     ## PROPERTIES ##
