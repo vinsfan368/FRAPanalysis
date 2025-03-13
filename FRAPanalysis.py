@@ -48,7 +48,6 @@ import re
 
 # Type hints and func signatures
 from typing import Tuple, Dict
-from inspect import signature
 
 # Pickle
 import pickle
@@ -130,6 +129,9 @@ class FRAPChannel:
             Movie has incorrect number of dimensions."
 
         # Crop movie if acquisition box doesn't agree with frame size
+        # TODO: Fix this, currently it only caches geo if it finds a
+        # rectangle, then a try-except block later in the code tests
+        # for this
         try:
             self.geo = self.metadata['Layers']['Layer']['Elements']\
                                     ['Rectangle']['Geometry']
@@ -142,10 +144,12 @@ class FRAPChannel:
         except:
             implied_X = self.metadata['Information']['Image']['SizeX']
             implied_Y = self.metadata['Information']['Image']['SizeY']
+            # I'm not sure this test actually does anything
             if (implied_X != movie.shape[2]) or (implied_Y != movie.shape[1]):
                 raise RuntimeWarning("FRAPChannel.preprocess_movie: \
                     Warning: movie size doesn't match metadata.")
             return movie
+
 
     ################
     ## PROPERTIES ##
@@ -227,14 +231,13 @@ class FRAPChannel:
         events = self.Czi.attachment_directory[0].data_segment().data()
         # Find bleach stop timestamp
         if isinstance(events, Tuple):
-            id = [e.__str__().startswith("BLEACH_STOP") 
+            id = [str(e).startswith("BLEACH_STOP") 
                   for e in events].index(True)
         else:
             raise RuntimeError("FRAPChannel.parse_attachments:\
                 Failed to parse attachments on CZI file.")
         
-        bleach_stop = float(re.findall(r'\b\d[\d,.]*\b', 
-                            events[id].__str__())[0])
+        bleach_stop = float(re.findall(r'\b\d[\d,.]*\b', str(events[id]))[0])
         self._timestamps = timestamps - bleach_stop
     
     def parse_metadata(self):
@@ -263,13 +266,14 @@ class FRAPChannel:
                   for i in range(0, len(points), 2)]
         points = np.asarray(points)
         # Return as y, x Tuple
-        center = (np.median(points[:,1]), np.median(points[:,0]))
+        center = (np.median(points[:, 1]), np.median(points[:, 0]))
+        # TODO: Fix this try-except block, it's really testing if geo
+        # is cached.
         try:
             self._bleach_circ_center = (center[0] - self.geo['Top'],
                                         center[1] - self.geo['Left'])
         except:
-            self._bleach_circ_center = (np.median(points[:,1]), 
-                                        np.median(points[:,0]))
+            self._bleach_circ_center = center
         
         # Take the average of the x range and y range as the bleach diameter
         x_range = np.max(points[:,0]) - np.min(points[:,0])
@@ -670,7 +674,7 @@ class FRAPAnalysis:
 
         # Initialize axis bounds with all intensity data, then show first point
         line, = axs[4].plot(self.timestamps, self.norm_intensities)  
-        line.set_data(self.timestamps[0], self.norm_intensities[0])      
+        line.set_data([self.timestamps[0]], [self.norm_intensities[0]])
         
         # Turn axis markings off for movie plots
         for ax in axs[:4]:
@@ -983,6 +987,7 @@ class FRAPCondition:
     ## PLOTTING ##
     ##############
     def plot_scatterplot(self,
+                         plot_scatter: bool=True,
                          plot_rolling_mean: bool=True,  
                          plot_rolling_std: bool=False,
                          plot_single_exp: bool=False, 
@@ -1023,9 +1028,10 @@ class FRAPCondition:
         
         """
         # Plot normalized intensities
-        plt.scatter(x=self.timestamps, y=self.norm_intensities, 
-                    s=2, color='dimgray')        
-        
+        if plot_scatter:
+            plt.scatter(x=self.timestamps, y=self.norm_intensities, 
+                        s=2, color='dimgray')        
+            
         # Plot the rolling average intensities and std, if desired
         mean_times, mean_intensities, std = self.rolling_mean_intensities
         if plot_rolling_mean:
@@ -1196,19 +1202,15 @@ class FRAPCondition:
     
     @staticmethod
     def _single_exp(dt, A, tau):
-        C = 1 - A
-        return A * (1 - np.exp(-dt / tau)) + C
+        return A * (1 - np.exp(-dt / tau))
 
     @staticmethod
     def _double_exp(dt, A1, tau1, A2, tau2):
-        C = 1 - A1 - A2
         return (A1 * (1 - np.exp(-dt / tau1))
-              + A2 * (1 - np.exp(-dt / tau2))
-              + C)
+              + A2 * (1 - np.exp(-dt / tau2)))
 
-
+'''
 class FRAPDataset:
-    """NOT FUllY IMPLEMENTED"""
     def __init__(self, condition_dict: Dict[str, list[FRAPAnalysis]]):
         # Sanity checks for passed dictionary
         for k, v in condition_dict.items():
@@ -1247,10 +1249,7 @@ class FRAPDataset:
                 arr = np.array([], dtype=float)
                 for v in d[k]:
                     pass
-
-    ##############
-    ## PLOTTING ##
-    ##############  
+'''
 
 if __name__ == "__main__":
     folder = '/Volumes/VF4/FRAP/221104_LnCAPFRAP'
